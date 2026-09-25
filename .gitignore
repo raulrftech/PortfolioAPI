@@ -1,0 +1,24 @@
+# Build output
+target/
+build/
+.gradle/
+out/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+
+# Java
+*.class
+*.jar
+!grade-wrapper.jar
+
+# Secrets - never commit real DB creds
+.env
+application-local.properties
+application-local.yml
+*.log
