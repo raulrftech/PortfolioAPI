@@ -1,0 +1,73 @@
+System Desing Part 1 - Reference
+
+Client-Server Model, REST< Statelessness, Idempotency
+Everything covered in the first System Design session, consolidated for readind and reference - grounded in PortfolioAPI throughout, since that's where these ideas get applied
+
+1. The Client-Server Model
+    Two distinct roles, always:
+        Client - whoever initiates a request. Simpli on a phone, a browser, another service
+        Server - listens for requests, does the work, sends a response back
+    Communication happens over a network, almost always HTTP/HTTPS: request goes one way, response comes back
+    Why the split matters:
+        separation of concerns
+        The clinet owns presentation and user interaction
+        The server owns data and business logic
+        Because the only thing connecting them is the interface between them (the API contract), each side can change independently as long as that contract holds
+            rewrite Simpli's entire UI without touching PortfolioAPI; swap Postgres for a different database on the server and Simpli never knows, because it only ever talks to the API, never the database directly
+    One consequence that matters later (System Design Pt 2)
+        a single server can talk to many clients at once.
+        Thats fundamentally different from a desktop app where one program owns one user's data on one machine
+
+2. REST
+    Not a protocol or a library - an architectural style, a set of conventions for designing an API on top of HTTP, Three pieces work together:
+    Resources
+        Everything actionable is modeled as a "thing", identified by a URL - a noun, not a verb
+        /accounts/123 is a rosource and so is /accounts/123/holdings
+    Verbs (HTTP Methods)
+        The verb says what you are doing to the resource named in the URL:
+        Verb            Purpose                                 Idempotent?             Typical Success Code
+        GET             Retrieve - never changes state          Yes                     200 OK
+        POST            Creates or triggers action              No                      201 Created
+        PUT             Replace resrc entirely                  Yes                     200 OK or 204 No Content
+        PATCH           Partially update resource               Depends                 200 OK
+        DELETE          Remove a resource                       Yes                     204 No Content
+    A PATCH's idempotency depends on what it actually does. "Set status to closed" is idempotent - repeat it, same end state
+        "Increment balance by 10" is not - each repeat adds 10 again. The verb itself doesnt guarantee it, the operation's semantics do
+    GET /accounts/123 reads as "give me account 123". POST /accounts reads as "create a new account"
+
+3. Statelessness
+    Every request must carry everything the server needs to process it. The server keeps no memoery of previous requests from that client
+    Picture a bank teller who forgets you the instant you walk away - no notes, nothing carried over. Every visit, you re-explain who you are (an auth token) and what you want from zero
+    Thats a stateless server. A stateful design would be a teller keeping a running notebook on you in memoery between visits
+    Why insist on the forgetful version:
+        It is what makes horizontal scaling possible. If the server holds no per-client memoery, any server instance behind a load balancer can handle any request - 
+            nothing is pinned to whicherver machine talked to you last
+        If session state lived in one server's RAM, every request from a client would have to be forced back to that same machine ("sticky sessions"), undercutting the point of scaling horizontally.
+    Precision Point:
+        "Stateless" describes how the server handles each request - it does not mean state does not exist anywhere.
+        PortfolioAPI's data (accounts, holdings, transactions) is very much persisted in Postgres
+        What's stateless is the request/response cycle itslef: no conversational memory sitting in server RAM linking one request to the nest
+4. Idempotency
+    An operation is idempotent if doing it multiple times has the same effect as doing it once. Repeat it 5 times or 1 time - identical end state
+    GET - trivially idempotent. Reading never changes anything
+    PUT - idempotent by design. Send the same full replacement 5 times, same final state as sending it once
+    DELETE - idempotent. Once gone, calling delete again does not change end state (resource absent), even. if the response code differs on the repeat call ( 404 vs 204 )
+    POST - clasically not idempotent. "Create a new X" run 5 times typically creates 5 X's
+    Why this inst academic for PortfolioAPI:
+        networks are unreliable
+        Timeouts happen, clients retry automatically, users tap "Buy" twice out of impatience
+        Retrying an idempotent operation is always safe.
+        Retrying a non-idempotent one like a raw POST /transactions - can execute the same buy order twice, silently double-counting a trade that should've happened once
+        This is the direct link to "reliability basics: retries and timeouts" from the sprint plan
+    The standard fix - idempotency keys:
+        the client generates a unique ID per transaction attempt and sends it with the request
+        The server remmebers which keys it's already processed; if the same key shows up again, it returns the original result instead of executing the transaction again
+        Worth deciding on deliberately (or explicitly rejecting, with reasons) once POST /transactions actually gets built
+            that decision is exactly the kind of design choice the standing "alternative considered and rejected" requirement is for
+How this maps onto PortfolioAPI
+    CONCEPT                       WHERE IT SHOWS UP
+    Client-Server                 Simpli (or any client) never touches Postgres direclty - only the API
+    REST (rsrcs/verbs)            /accounts, /accounts{id}/holdings, /transactions as nouns; CRUD verbs on each
+    Status Codes                  404 on a missing account, 400 on an invalid sell, 201 on a created transaction
+    Statelessness                 Every request to /accounts/{id}/summary must self-identify the caller - no server-side memory of "who asked last"
+    Idempotency                   POST /transactions is the one endpoint that specifically needs an idempotency-key decision, since it's not idempotent by default
