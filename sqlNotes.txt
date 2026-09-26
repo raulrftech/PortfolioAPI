@@ -1,0 +1,140 @@
+# SQL PART 1
+    What a database actually is.
+        A database is a persistent, organized store of data - "persistent" meaning it survives after the program that wrote it stops running
+            That's the whole reason PortfolioAPI needs one at all:
+                An account's holdings need to still exist after the server restarts, across many users at once, and can be queryable in complex ways ("sum up everything this account currently holds")
+        A relational database (Postgres, in my case) organizes everything into tables. THink of a table as a single, rigidly structured spreadhseet
+            A table represents one kind of thing - an accounts table, or a holdings table
+            A row is one specific instance of that thing - one particular account
+            A column is one piece of data every row in that table has - every account row has an id, an owner_name , a created_at date and so on
+    Primary Keys
+        Every table needs a way to uniquely identify each row - some column whose value is guaranteed different across every row, used to print at "this exact one" from anywhere else in the system. This is a primary key
+        The usual convention:
+            a plain auto-incrementing integer (or sometimes a UUID) column called id, with no real-world meaning of its own - it exists purely to uniquely identify the row
+        Concretely, an account table might look like
+        id(PK)          owner_name              created_at
+        1               Emmanuel                2025-09-25
+        2               Test User               2026-09-25
+        id = 1 unambiguously means "this exact account" no matter what else about it changes later
+Quick check before the next layer, relationships are started:
+    if i asked you to sketch a holdings table, what would you want as its primary key and why does it need one at all rather than just letting rows exist unlabeled
+        A Holding is something specific Account owns. Specifically, it is the record of "this account currently holds this many units of this asset"
+        One holding row ties together three things - which account, which asset and how much of it
+        So a holdings table needs, at minimum
+            account_id - which account this belongs to
+            asset_id - which asset is being held (a stock ticker)
+            quantity - how many units/shares of it
+        Now, the primary keys specifically - it's tempting to think "Isn't a holding just identified by whcih account + which asset?"
+            That's a reasonable instinct but the primary key is actually still just a plain id, same pattern as accounts.id
+            Here's why:
+                the primary key's job is to uniquely identify this row itself, separate from whatever data happens to sit onit
+                account_id and asset_id are not this rows identity - they are pointers to rows that live in other tables (accounts and assets)
+        A column that points at another table's primary key is called a foreign key.
+    I tried to configure the url of a particular asset of a user with accounts/idOf/assets/asset_id but this is incorrect
+        the resource in the url should be holdings, not assets and here is why
+            assets as its own resource would mean the separate reference table, a stock ticker's general info (symbol, current simulated price), the same no matter who's looking at it
+        What the url I made is actually describing -> this accounts position in a particular asset - is Holding data ( how much of it this specific account owns), which is a different thing entirely, even though it refrences an asset
+        So the more correct url would be /accounts/acc_id/holdings/id - where id is the holding's own primary key, not the asset's ID
+        There's a real alternative you might be circling, though and its worth naming:
+            since an account can only ever have one holding per asset in this design (buying more AAPL updates the existing holding rather than creating asecond one)
+            /accounts/acc_id/holdings/asset_id would also technically work, using asset_id as a stand-in identifier
+            Its not wrong right now but it quietly bakes in the assumption that one holding per asset holds forever
+            If portfolioAPI ever grew to track individual purchase lots (real portfolio trackers often do, for cost-basis purposes), that scheme breaks, while the holding's own id stays valid no matter how the rules change later
+            That is the kind of alternative-considered-and-rejected reasoning worth writing down once the endpoint is actually built
+The three tables together
+        Accounts (who owns things)
+            id(PK)              owner_name          created_at
+            1                   Emmanuel            2026-09-25
+        Assets (reference data - same for everyone, independent of who owns what)
+            id(PK)              ticker              current_price
+            1                   AAPL                254.30
+            2                   GOOG                198.10
+        Holdings (the thing that actually connects the two)
+            id(PK)              account_id(FK)              asset_id(FK)                quantity
+            1                   1                           1                           10
+            2                   1                           2                           5
+What a foreign key actually is
+    A foreign key is a column whose value has to match a value that already exists in another table's primary key column
+    It is the actual mechanism for connecting two tables - the thing that lets you say "this row relates to that row" without copying that row's data
+    Read row id = 1 in holdings: account_id = 1 doesn't store a copy of Emmanuel's name or signup date, it stores the number 1, which points at the row in accounts where id = 1
+        If you the account's actual details, you follow that pointer and look them up there
+    Why point instead of copy?
+        Say every holding row stored the owner's name directly instead of just account_id
+            If that owner ever changed their name, you'd have to find and update every single holding row that mentioned them, miss one, and your data is now inconsistent, with two different truths about same account floating around
+        By storing just a pointer, the account's real data lvies in exactly one place and everything else just references it
+    It's not just a naming convention either
+        When you declare this properly in Postgres (FOREIGN KEY (account_id) REFERENCES accounts(id)), the database actively enforces it, it will flat out reject an attempt to insert a holding whose accID doesnt exist in accounts
+        You cant create an orphaned holding pointing at nothing
+    One more term worth having:
+        this is a one-to-many relationship - one account can have many holdings but each holding belongs to ecactly one account
+        Same shape from the asset side: one asset can show up in many different holdings
+    Quick check: if someone tried to insert a new holding with account_id = 99 and there is no account with that id in the accounts table, what happens and whcih table does Postgres actually check against to know that
+        THe holding's own id (its primary key) has nothing to do with the check. It only exists purely to uniquely identify the holding row itself and its nevber consulted when validating account_id. 
+        There is no traversing from it and no going back up a ladder.
+        There is one direct lookup:
+            Postgres takes the value you're trying to put into account_id - 99 - and asks a single question: does 99 exist anywhere in the accounts table id's column?
+                That's the entire check, one value checked against one column, in whichever table the foreign key was declared to reference
+        Since no account with id = 99 exists, that lookup comes back empty and Postgres rejects the entire insert outright  - no holdings row gets created at all, not even a borken one. You'd get a foreign key violation error
+        The actual mechanism is a single direct lookup on the referenced table's primary key - not a traversal starting from holding's own id
+What happens when you try to delete something other rows still point at?
+    By default, Postgres protects you: it refuses to delete an accounts row if any holdings rows still have that accID. You get an error, not silent orphaned data floating around pointing at nothing
+    But that behavior isnt fixed - you choose it explicitly when you declare the foreign key:
+        ON DELETE RESTRICT (effectively the default) - block the delete entirely
+        ON DELETE CASCADE - automatically delete the dependent rows too. Delete an account -> its holdings and transactions disappear with it
+        ON DELETE SET NULL - instead of deleting, balnk out the reference (only works if that column allows null)
+    This is a real decision youll commonly face: should deleting an account wipe its transaction history too with CASCADE or should the system flatly refuse to delete any account that has activity on it, forcing you to close some other way
+    Two smaller things;
+        Foreign keys allow NULL unless you say otherwise. By default, account_id could technically be left empty, meaning this row points at nothing.
+            For holdings, that's meaningless - a holding with no owner makes no sense - so you'd explicitly mark it NOT NULL when you write the real table definition
+        Foreign keys do not get an automatic index - A primary key always gets one for free so lookups by id are fast
+            A foreign key column does not. If you're constantly asking "give me every holding for account X" and accID has no index, Postgres scans the whole table once its large enough to matter
+            This is exactly what "indexing - why it matters"
+The rest of Constraints
+    UNIQUE - like a primary key in that it blocks duplicates, but two differences:
+        a table can have many UNIQUE constraints (only one primary key) and a UNIQUE coumn can be NULL (SQL does not treat two NULLs as equal to each other)
+        This is the direct answer from earlier: instead of making holdings primary key (accID, assetID) combined, you keep the simple id as primary key and add UNIQUE (accID, assetID) separately
+            This gets you the same guarantee - no two holdings rows for the same account+asset - without giving up the single column key
+    CHECK - enforces an arbitrary condition on a rows data
+            CHECK (quantity >= 0) on holdings rejects any insert or update that would make quantity negative
+            CHECK (current_price > 0) on assets, same idea
+            Doesnt replace real business logic (checkign cant sell more than you hold, needs the service layer since it compares against existing data) but for a flat, contained rule like never negative is the right tool
+    NOT NULL - general-purpose, not just for foreign keys
+                any column marked this way canot be left empty
+                owner_name NOT NULL means you cannot create an account with no name at all
+    DEFAULT - auto-fills a value when none is given
+              created_at TIMESTAMP DEFAULT NOW() means you never have to manually set a timestamp on insert
+    Composite primary keys - a primary key does not have to be one column
+                             PRIMARY KEY (accID, assetID) directly on holdings, with no separate id at all, is a legitamte alternative design to the one we picked
+                             The reason we didn't: Spring Data JPA works far more smoothly with single-column keys
+                                    a composite key needs extra machinery (@EmbeddedId or @IdClass) to work in JPA
+                             The id + UNIQUE combination gets the same data integrity without that overhead
+Normalization (1NF - 3NF)
+    This is the formal version of the "point instead of copy" reasoning from foreign keys - a set of rules for structuring tables so data is not duped and cant drift out of sync with itself
+    1NF -  every column holds one atomic value
+           No cramming multiple values into a single field
+           A table that stored "AAPL, GOOG, TSLA" as one comma-separated string in a single column would violate this
+                This is actually why holdings is its own table with one row per holding, instead of one account row with a giant list of assets field jammed into it
+    2NF -   every non-key column must depend on the whole primary key, not just part of it
+            This only bites when a key is composite
+            If holdings used (accID, assetID) as its primary key and also stored owner_name directly on that row, it would violate 2NF - owner_name depends only on accID, not on assetID too
+            The fix is exactly what we already did: do not store it there at all, look it up through the accID foreign key
+    3NF -   no non-key column should depend on another non-key column ( called a transitive dependency )
+            If holdings stored both assetID and a copy of the ticker symbol, that ticker depends on the asset, not on the holding itself - calssic 3NF violation
+            The fix: holdings stored only assetID; the ticker lives exactly once, on assets, reach through that pointer
+    Why bother:
+        normalized tables prvent the "update anomaly"
+            needing to change the same fact in multiple places and risking missing one, leaving inconsistent data behind
+        The cost is that reconstructing a full picture (an account's holdings with their ticker symbols) reqs JOINing tables back together, which has a real performance cost
+            That trade off is exactly why some real systems dilberately break normalization for speed
+
+
+
+
+'/opt/homebrew/Cellar/postgresql@18/18.6/bin/pg_ctl' -D '/opt/homebrew/var/postgresql@18' -l logfile start
+To start postgresql@18 now and restart at login:
+  brew services start postgresql@18
+Tow things worth knowing here:
+    The connection and the file are independent of each other. You can have schema.sql open and still run it against the other file - SQLTools lets you pick which connection a query runs against regardless of which file is open
+    Right click the inside schema.sql and look for Run on active conection or check the bottom status bar for a connection picker and make sure PortfolioAPI Local is the one selected before running anything
+    Where schema.squl should actually live in the project:
+        Once Spring Boot is started, theres a convention: a file palced at exactly src/main/resources/schema.sql gets auto-executed against the database on startup, no extra code required
