@@ -150,3 +150,16 @@ VALUES ('Roth 2', 'roth_ira');
 
 INSERT INTO assets (ticker_symbol, category, asset_price)
 VALUES ('MSFT', 'tech', 402.750);
+
+SELECT assets.ticker_symbol, SUM(holdings.quantity)
+FROM holdings
+JOIN assets ON holdings.asset_id = assets.id
+GROUP BY assets.ticker_symbol;
+-- An INNER JOIN (JOIN by default) only returns rows that have a match on both sides, so an asset or acc with 0 mathcing holdings rows doesnt show up in the result at all, let alone get grouped
+SELECT * FROM accounts; SELECT * FROM assets; SELECT * FROM holdings;
+INSERT INTO holdings (account_id, asset_id, quantity)
+VALUES (2, 2, 15);
+INSERT INTO holdings (account_id, asset_id, quantity)
+VALUES (3, 1, 20);
+INSERT INTO holdings (account_id, asset_id, quantity)
+VALUES (4, 2, 25)
