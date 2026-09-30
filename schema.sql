@@ -158,8 +158,74 @@ GROUP BY assets.ticker_symbol;
 -- An INNER JOIN (JOIN by default) only returns rows that have a match on both sides, so an asset or acc with 0 mathcing holdings rows doesnt show up in the result at all, let alone get grouped
 SELECT * FROM accounts; SELECT * FROM assets; SELECT * FROM holdings;
 INSERT INTO holdings (account_id, asset_id, quantity)
-VALUES (2, 2, 15);
+VALUES (2, 5, 15);
 INSERT INTO holdings (account_id, asset_id, quantity)
 VALUES (3, 1, 20);
 INSERT INTO holdings (account_id, asset_id, quantity)
-VALUES (4, 2, 25)
+VALUES (4, 5, 25);
+-- Two separate things you can restrict and you can combine then
+-- Which columns come back - swap * for the column name you actually want, comma separated if you want more than one
+    -- SELECT ticker_symbol FROM assets;
+-- Which rows come back - add a WHERE clause. Works regardless of which columns you selected and it filters based on a condition
+    -- SELECT * FROM assets WHERE ticker_symbol = 'MSFT';
+    -- Same quoting rule as INSERT applies here: ticker_symbol is text, so the value needs single quotes.
+    -- Filtering on a numeric column like asset_price wouldn't:
+    -- SELECT * FROM assets WHERE asset_price > 100;
+-- And you can stack both - specific columns, rows, in one query
+    -- SELECT ticker_symbol, asset_price FROM assets WHERE category = 'tech';
+    -- With price: SELECT ticker_symbol, asset_price FROM assets WHERE category = 'tech' AND asset_price > 100
+
+
+
+
+-- Going to restart my progress since it was quite rushed before this push
+/*
+    What a client and server actually are
+        You split an application into two separate programs that talk to each other over a network
+            The server is a long running program holding the real data and the real logic - in your case, your Spring Boot app plus the Postgres database behind it. It just sits there, waiting
+            The client is whatever's making requests to it. Right now thats Postman, later it could be a real web frontend, mobile app, or someone elses system hitting your API
+
+    Why split it this way at all? A few oncrete reasons, not just "thats how its done":
+        Separation of Concerns
+            The client's job is presentation
+                Showing data, collecting input
+            The server's job is the actual business logic and data access
+            If you dont separate those, every place that touches the data has to reimplement the rules for touching it correctly
+        One server, many clients
+            A real compnay might have a web app, an iOS app, and an Android app, built by three different teams - but all of them can talk to the same backend
+                So the logic for something like "how do you calculate a portfolio's value" gets written once, in one place, isntead of 3 times across 3 codebases that could quietly drift out of sync with each other
+        One place to actually enforce the rules
+            The server is the only place your rules can be trusted to run, because you cannot rely on a client to enforce anything on itself
+
+    The request/response cycle
+        By defualt, this relationship is client-initiated:
+            the server does not reach out to clients on its own, it waits, and only does anything in response to a request arriving
+            (WebSockets/server push are the named exception - the server sending data without being asked first - but thats not the default mode, and not what your REST API does)
+            Concretely, in your own proj, you open Postman, point it at localhost:8080/acccounts, hit send
+                Request out, response back - that whole round trip is the cycle
+                Postman is just standing in as "a client" for now; a real frontend would make that exact same kind of request, just from a browser or app instead of a testing tool
+    One more piece to sit with:
+        The server does not actually know or care, ata deep level, whether a request came from Postman, a browser, a phone or someone else's server entirely -
+            it sees "a well-formed request arrived" and processes it the same way no matter where it came from
+
+    Five Questions to Begin:
+        Say a web app, mobile app, and a partner's 3rd party integreation all send requests to the same /accounts endpoint on your sever. What does the server actually need to know about which of those three it's talking to?
+            Im going to guess on this, its whichever account is trying to be logged into on each of these 3 devices respectively that signifies that the request is being made by that particular device
+
+            The server doesnt actually need to know which of the three it's talking to at all, that distinction is basically invisible to it
+            All 3 just show up as an HTTP request to /accounts.
+            What it needs is who, which account, and that identity is carried the same way regardless of which of the three sent it
+            The web app, mobile app and partner integration could all be acting on behalf of the same account and the server would handle very one of the requests identically
+        If your client's form blocks a user from entering a negative quantity, and that check only exists on the client side, how could a negative quantity still end up in your database?
+            No idea tbh, as said previously, the business logic enforces the rules because the client is never trusted to enforce the rules
+
+            That form's validation only runs inside the client's own code, a JS check in a browser. Nothing forces anyone to go through the form to reach your server
+            Postman does not run your form's JS, it just sends raw HTTP directly
+            You could open Postman rn and POST a negative quantity straight to your server, skipping the form entirely. if the server does not recheck that value itself, it goes straight to the database
+        Why does it matter, architecturally, that the server does not need to know or care whether a request came froma browser, mobile app or something else?
+            No idea, this wasnt really expalined
+        If you have a web client and a mobile client that both need the same data, do you biild one server that both talk to, or 2 separate servers? Why?
+            One server that both talk to and this is so that there isnt more than one codebase that can drift out of sync with the other
+        When a request hits your server, what actually tells it which account or user is making that request?
+            i would assume that the identifying information about the account or user making the request is included along with the request
+*/
