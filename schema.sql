@@ -223,9 +223,13 @@ VALUES (4, 5, 25);
             Postman does not run your form's JS, it just sends raw HTTP directly
             You could open Postman rn and POST a negative quantity straight to your server, skipping the form entirely. if the server does not recheck that value itself, it goes straight to the database
         Why does it matter, architecturally, that the server does not need to know or care whether a request came froma browser, mobile app or something else?
-            No idea, this wasnt really expalined
+            Because the server doesnt hardcode anything about is this a browser or is this mobile, you can add a brand new kind of client, a smartwatch app, a CLI tool, another partner 2 years from now, without ever touching the server
+            If the server did need to special-case each client type, every new client would mean a server change
+            This is the actual mechanism behind the answer to the next, one server, many clients only works because the server treats all of them identically
         If you have a web client and a mobile client that both need the same data, do you biild one server that both talk to, or 2 separate servers? Why?
             One server that both talk to and this is so that there isnt more than one codebase that can drift out of sync with the other
         When a request hits your server, what actually tells it which account or user is making that request?
             i would assume that the identifying information about the account or user making the request is included along with the request
+            Concretely, that usually means a token or credential attached to the request itself, most commonly an Authorization header carrying soemthing like a bearer token or a session cookie
+            The key idea is: identity travels explicitly with the request, always, never guessed from context
 */
