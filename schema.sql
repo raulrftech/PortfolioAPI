@@ -191,11 +191,22 @@ VALUES (4, 5, 25);
                 Showing data, collecting input
             The server's job is the actual business logic and data access
             If you dont separate those, every place that touches the data has to reimplement the rules for touching it correctly
+            As long as the interface between client and server (the API) stays the same, either side can change independently without the other knowing or caring
+                You could swap out Postgres for something else entirely or completely redesign the frontend and as long as the contract in between does not change, nothing breaks on the other side
+            That stable boundary is what "API contract design" is actually about
         One server, many clients
             A real compnay might have a web app, an iOS app, and an Android app, built by three different teams - but all of them can talk to the same backend
                 So the logic for something like "how do you calculate a portfolio's value" gets written once, in one place, isntead of 3 times across 3 codebases that could quietly drift out of sync with each other
         One place to actually enforce the rules
             The server is the only place your rules can be trusted to run, because you cannot rely on a client to enforce anything on itself
+    
+    When do you actually need more than one server?
+        Different, unrelated applivations get different servers. "One server, many clients" was about multiple clients of the same application
+            A second, unrelated project you build someday is simply a separate server
+        Too much traffic for one machine
+            When a single server cant keep up with the request colume, you run several identical copies of the same server behind a load balancer that spreads requests across them "horizontally scaling"
+        Splitting one large application into smaller independent pieces (a payments service, a notifications service, etc.) each its own server, usually called microservices
+        Reliability - more than one server so if one goes down, another keeps serving
 
     The request/response cycle
         By defualt, this relationship is client-initiated:
@@ -204,6 +215,8 @@ VALUES (4, 5, 25);
             Concretely, in your own proj, you open Postman, point it at localhost:8080/acccounts, hit send
                 Request out, response back - that whole round trip is the cycle
                 Postman is just standing in as "a client" for now; a real frontend would make that exact same kind of request, just from a browser or app instead of a testing tool
+        A request has four paets, a method (GET, POST, etc), a URL/path, headers (metadata, like an auth token), and sometimes a body (the actual data, e.g. JSON you're sending)
+        A response mirrors that: a status code, headers and a body. Thats exactly what you'll see in Postman once there's a server to hit - a method dropdown and URL bar on one side, status code and response body on the other
     One more piece to sit with:
         The server does not actually know or care, ata deep level, whether a request came from Postman, a browser, a phone or someone else's server entirely -
             it sees "a well-formed request arrived" and processes it the same way no matter where it came from
@@ -233,3 +246,106 @@ VALUES (4, 5, 25);
             Concretely, that usually means a token or credential attached to the request itself, most commonly an Authorization header carrying soemthing like a bearer token or a session cookie
             The key idea is: identity travels explicitly with the request, always, never guessed from context
 */
+
+/*
+    REST
+
+    What it actually is:
+        not a protocol or a strict standard, just a set of conventions for designing APIs on top of the request/response cycle, so APIs end up predictable instead of everyone inventing their own scheme
+    The Core Ideas:
+        Resources are nouns, represented by URLS
+            /accoounts, /accounts/5, /accounts/5/holdings, not vers baked into the URL like /getAccountById
+        Operations are HTTPS methods, not URL text
+            GET reads, POST creates, PUT/PATCH updates, DELETE removes
+            The verb lives in the method, never the path
+        Status codes communicate outcome, consistently
+            200 OK, 201 Created, 400 Bad Request, 404 Not Found, 500 Internal Server Error - standard meanings, so a client can interpret the result without per-endpoint documentation
+    Real-World Context - this is literally your API
+        GET /accounts/5, POST /accounts, POST /transactions, GET /accounts/id/summary - all allready siting on your captstone core build list
+            REST is the convention youll be following when you build those for real
+        Edge Cases Worth Knowing Now
+            Not every operaiton maps cleanly to a noun - something like "activate this account" doesnt fit neatly into get, post, put, delete on a resource, and real APIs handle this in genuinely different, debated ways
+            Picking the wrong status code is a common real mistake - returning 200 on an error breaks a client's error handling, since the response is now lying about what happened
+            Nested vs flat Urls (/accounts/5/holdings vs /holdings?accountId=5) is a real design decision you'll face defining your own API contract, not trivia
+
+/*
+-- Exercise 1 - Propose the URL, the HTTP method, and the status code
+    -- A client wants to fetch the details of a single account with ID 5. What is the URL, what method do you use, and what status code do you expect back on a sueccess
+        -- the url would be /accounts/5. The method Id use is GET since it reads and the status code would be 200 if the server works and 500 if not
+    -- Also, what status code would you expect if account 5 does not exist
+        -- if the account does not exist, then the status code would be 404
+    -- One thing to refine - framing it as 200 if the server works and 500 if not, which puts 500 in the came category as 404, like its a 3rd outcome youre deliberately coding for, its not
+    -- Here's the actual split
+        -- 2xx (200, 201...) - success. You design for this
+        -- 4xx (400, 404...) - something wrong with the request itself. You design for this too, "no account with that ID" is a completely normal, anticipated case for a GET-by-id endpoint,
+            -- which is exactly why 404 is one of the two outcomes listed
+        -- 5xx (500...) - something borke on the server while it was trying to handle an otherwise valid request.
+            -- You do not design a branch that returns this. It's what happens automatically when your code thorws an exception you did not catch, a null pointer, the database connection dropping, whatever
+            -- There's no if statement in your controller that says "return 500", it is the fallback for something you didn't anticipate goes wrong
+    -- So for this endpoint, the 2 outcomes you design are 200 (found it) and 404 (not found). 500 isnt a third branch sitting next to those, its what happens if code is buggy or something fails unexpectedly
+-- Exercise 2
+    -- A client wants to create a new account.
+    -- What is the URL, what method do you use and what status code do you expect back on success?
+        -- POST /accounts newUserInfo, status code on success is 201 for creation
+    -- What status code would you expect if the request is missing a required field (say, the account owner's name)
+        -- Status code for invalidity in this case would be 400, insufficient information yields a bad request
+-- Exercise 3
+    -- A client wants to update just the email address on an existing account with ID 5, not replace the whole account record, just that one field
+    -- What URL, what method, and what status code on success
+        -- I forget what the the difference between PUT and PATCH is so ill stick with PUT /accounts/5/emailAddress or soemthing of the sort, status code on success would be 200 since nothing is created, just replaced
+    -- The URL /accounts/5/emailAddress treats the email like its own resource, same way holdings is but holdings are genuinely separate entities with their own identity, while emailAddress
+        -- is just one attribute of the account. The resource being updates is still account itself. The URL stays /accounts/5. Which field you're changing goes in the request body, not the URL
+    -- PUT vs PATCH:
+        -- PUT = full replacement, the contract is "here is the entire representation of this resource, repalce what you have with exactly this"
+            -- If you PUT to /accounts/5 with only {"email": "..."} in the body, a strict implementation treats that as "this is now the whole account" and could wipe out every other field you did not include
+        -- PATCH - partial update, built specifically for "change just these fields, leave everything else alone" which is exactly what this exercise asked for
+    -- Real World Edge Case worth knowing:
+        -- plenty of production APIs are loose about this and use PUT for partial updates anyway but PATCH is the spec-correct, interview-correct answer when the question is specifically "update one field"
+-- Exercise 4
+    -- A clients wants to delete account 5. What is the URL, what method and status code do you expect on success?
+        -- DELETE /accounts/5, status code would be 200 for success, not 201 since nothing is getting created but destroyed, if user tries to access the acc again it would be 404
+    -- For DELETE specifically, the spec-precise answer is 204 No Content
+        -- A successful DELETE has nothing menaingful to send back - the resource is gone, there is no new state to describe
+        -- 204 means exactly that: "this succeeded and there is intentionally no body in this response"
+        -- 200 implies a body is coming back which does not really fit a delete
+    -- Plenty of real-world APIs just use 200 for deletes anyway (sometimes with a small confirmation message in the body - a legit reason to pick 200 instead) but 2-4 is the interview-expected answer
+-- Exercise 5
+    -- A client wants a list of all accounts. What is the URL, the method, and the status code on success - including the case where there happen to be 0 accounts in the system?
+        -- Since this would be a bad request the status code is 400, the url would be GET /accounts, if there are accounts the status code would be 200
+    -- 400 Bad Request means something is wrong with the request itself such as bad syntax, missing required parameter, a malformed body
+    -- GET /accounts with nothing else attached is a perfectly well-formed request. Theres nothing wrong with it, so 400 does not apply no matter what the result turns out to be
+    -- THe server runs the query succesfully either way, if there happens to be 0 accounts, the honest correct answer to give me all accounts is an empty list, thats a complete, succesfully response, not a failure
+    -- Here's the contrast with exercise 1 that matters:
+        -- /accounts/5 names one specific resource that either exists or doesnt, hence 404 when it is missing
+        -- /accounts names the collection itself, whihc always exists as a queryable endpoint regardless of how many items currently match
+        -- So the rule is: GET /accounts -> 200 with body [] whether there are 0 or >1 accounts
+            -- The account of results changes what is in the boyd but never changes the status code
+-- Bonus Further-Depth Exercises
+    -- Scenario 1 - Buying Shares
+        -- A client wants to buy 10 shares of ticker AAPL for account 5. Behind the scenes this needs to: confirm the asset exits, confirm account 5 has enough cash to cover the purchase, create a transaction record, and update
+            -- or create the corresponding holding. Design the endpoing for this action - URL, method, what goes in the request body, 
+            -- then walk through every outcome you can think of: success case, at least 2 distinct fialure cases, with a status code and reasoning for each
+            -- In order to access assets it would be GET /assets, to confirm the account has enough it would be GET /accounts/5 in order to check the balance, the transaction record would be made upon success whihc is 200
+            -- the update or create would be PUT /accounts/5/holdings/assetID, using PUT here since you had said that PUT is used in companies to either update or create
+            -- 2 distinct failure cases would be the account not existing so 404 for that, no asset of AAPL found within /holdings so 404 on that too, I think insufficient cas would be 400 since he/she needs a certain amount for 10 shares
+        -- The Core Issue:
+            -- the prompt asked you to design the endpoint (singular) for buy 10 shares of AAPL for acc 5. WHat was described is a sequence of 3 separate client-facing calls,
+                -- which means the client ends up responsible for checking the asset exists, checking the balance, and deciding whether to proceed. That's exactly what Client-Server taught you to avoid:
+                    -- business logic belongs on the server, not the client.
+                    -- If the client has to orchestrate "check the balance, then decide whether to call the next endpoint", you've pushed the actual buy-or-reject decision onto whoever's calling your API
+                        -- and nothing stops a buggy or malicious client from skipping the balance check and calling the PUT directly
+        -- The Fix:
+            -- one endpoint, one request from the client's pov. That's POST /transactions. The client sends what it wants to happen; the server does all the checking and all the internal updates (including touching the holdings table) as part of handling that single request:
+                -- POST /transactions {"accountId" : 5, "ticker" : "AAPL", "quantity": 10, "type": "BUY"}
+                -- Checking the asset exists, checking the balance, creating the trans record, updating holdings, all of this still happens. It just happens inside the server's handling of this one request, not as separate calls the client sequences itself
+        -- Status Codes, Against That Corrected Design:
+            -- Success, said 200. Think back to exercise 2: a transaction record is a brand new resource being created here, same as the new account was. This should be 201 Created, not 200
+                -- Good question to ask yourself going forward: does this bring a new resource into existence, not just did it succeed
+            -- Account doesnt exist: 404 was correct
+            -- Asset doesnt exist, 404 in principle but what the phrasing, saying no asset of AAPL found within /holdings checks the wrong thins.
+                -- Whether the account already holds AAPL is irrelevant to whether AAPL can be bought, not holding it yet is the completely normal case for a first-time purchase, not an error
+                -- The real check is does AAPL exist as a tradable asset in the system at all, a lookup against the assets table, not the accounts holdings
+                -- Insufficient funds, you said 400 and thats not wrong. Its in the right family. But here's a more precise code, 422 Unprocessable Entity, which a lot of real APIs use
+                    -- specifically for this request is well formed but it violates a businesss rule, exactly what insufficient funds is
+                -- Some APIs use 409 Conflic for the same situation (request conflicts with the accounts current state)
+                    -- Both are legitamte and APIs genuinely split between them, 400 is the safe generic fallback if you dont want to commit to either
