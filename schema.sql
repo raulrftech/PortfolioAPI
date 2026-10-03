@@ -436,7 +436,9 @@ VALUES (4, 5, 25);
                         -- Worth knowing now: once you reach Spring Data JPA, its built-in Page<T> type returns almost exactly this shape by default (content/totalPages/totalElements/size/number)
             -- Two more on this:
                 -- Design the request for page 1 with a page size of 20 instead of 50. If there are 97 accounts total, what would total_pages be in the response?
+                    -- GET /accounts?page=1&limit=20, total pages would be 5, last page would have 17
                 -- A client requests page=999 but there are only 5 pages worth of accounts. Walk through it - what status code and what does the response body look like?
+                    -- 422 Unprocessable Entity, response would be something like {"error": {"code": "Insufficient Number of Pages", "message": "There are only 5 available pages", details: {"currentAccountsAmount": 100, "validPagesAmount": 5}}}
     -- Scenario 5 - Error Response Bodies
         -- When POST /transactions fails with a 422 because the account doesnt have enough cash, a bare 422 status code with an empty body doesnt give the client anything to show the user
         -- Design what the respons ebody should contain in that failure case so the client can acutally display a usefull error message
@@ -455,4 +457,124 @@ VALUES (4, 5, 25);
                         -- This {code, message, details} pattern is very common in real APIs, Stripe's error objects are a well-known example
         -- Two More on This:
             -- Apply the same shape to a 404, GET /accounts/5 where acc 5 does not exist. What would code, message, and details be? Does details even need much in it this time?
+                -- the code would be 404, message would be Account Does Not Exist, details does not need much in it since the message says clearly
             -- POST /accounts fails validation on two fields at once, a missing email and an invalid age. Does the same details shape still work as-is, or does soemthing about it need to change to report more than one problem at once
+                -- I think that the details shape would be different, containing the message for both errors so an error on either field would need its respective message
+        -- Clarification on Requests and Responses
+            -- Method + URL is always there - its "what action on what resource" GET /accounts/5 is a complete request all by itself
+            -- {} is JOSON , a text format for key-value data. When it's attached to a request its called the request body or just the body, the actual data youre sending, separate from which resource youre sending it to
+            -- Whehter a request needs a body depends entirely on the method
+                -- GET never has a body. You're only reading so the URL path (path + query params) is the whole request.
+                    -- Every GET you've designed so far stops there, theres nothing to write as a {}
+                -- POST/PUT/PATCH usually need both, the URL says what you're acting on, the body says what data to act with. eg PATCH /accoutns/5 with body {"accStatus": "inactive"}
+                    -- the URL identifies the account, the body carries the new value
+            -- Request body is not quite changing data its more does the URL alone already say everything or is there extra data riding along with it
+                -- GET has no body because it's pure identification - the URL names a resource, nothing more to say.
+                -- But DELETE also has no body, even though deleting absolutely changes data, DELETE /accounts/5 already fully specifies what to do with just the URL, there's no additional data needed to describe the change
+                -- POST/PUT/PATCH are the ones that need a body, specifically because the URL alone cannot carry the new values, that is what the body is for
+                -- So, the real line is not read vs write, its does the URL fully specify this on its own or does something extra need to come with it
+            -- Request body, not just for GET
+                -- A response body shows up on almost everything
+                -- GET returns the resource you asked for
+                -- POST/PUT/PATCH typically return the created or updated resurce so the client sees the final state without a second request
+                -- THe one deliberate exception is 204 No Content, DELETE success response, that is the one case where the server intentionally sends nothing back at all because there is no resource left to describe
+        -- Rating on Performance of 4 and 5
+            -- The second question on 4 is wrong
+                -- page=999 when only 5 pages exist itn't a business-rule violation, nothing is malformed about the request and no rule is being broken
+                    -- Its a perfectly valid request that simply has nothing to return at that page. 422 doesnt fit here in the way it fit in insufficient funds, because insufficient funds is an actual rule (you cannot buy more than you can afford)
+                    -- page 999 doesnt exist isnt a rule its just where the data runs out
+                    -- The correct answer is 200 OK, with the same envelope shape as any other page
+                        -- { page: 200, page_size: 20, total_count: 100, total_pages: 5, data: [] }
+                    -- page echoes back what was aksed (even past the end), the totals tell the cleint where the real end is, and data is just empty
+                -- The test to carry forward its never "did I get data back", it is "was anything wrong with the request"
+                    -- A correclty-formed request the server understood exactly is a success no matter how many results come back, including 0
+            -- Error Bodies(a), there are two different things both called code her
+                -- The HTTP status code - the number 404 is correct, that one does not change
+                -- The error envelopes code field - a string, inside the JSON body separate from the numeric status. Something like "ACCOUNT_NTO_FOUND" was the one intended
+                -- The rest is fine, the message content is fine, and youre right that the details doesnt need much here isnce theres nothing left to say beyond "this one does not exist" which the URL already implied
+                    -- {error: ACCOUNT_NOT_FOUND, message: Account 5 does not exist: details: {}}
+            -- Error Bodies (b). yes something has to change, a flat detauls object cannot hold two separate problems cleanly, your direction, a message keyed by field name works
+                -- details: { email: Email is required, age: Age must be a positive number}
+                -- The other pattern you'll see in real APIs is an array of field-error objects instead
+                    -- details: {{field: email, message; Email is required}, {field: age, message: Age must be a positive number}}
+                -- Your simpler verison is fine as long as a field only ever has one problem at a time
+                -- The array version is more common in production because it scales to a field having more than one problem at once ( a password that is both too short and missing a number),
+                    -- an obj can only hold one message per key, an array can hold as many entries as needed for the same field
+                    -- Either is defensible, same pick one and be consistent situation as before
+        -- Pagination's request/envelope mechanics are solid but the edge vs case error line ahs missed three times across so two more are target at exactly that before scenario 4 closes
+            -- Same situation but page = 0, instead of page=999, same answer or different and why
+                -- I believe this should be a business rule that there cannot be any page 0, page 0 would mean that there is no data whatsoever but a page 0 should not be accessible
+                -- One correction: its not a business rule, call it that and you would be reaching for 422 again
+                    -- The difference is whether you need to check any actual data to know something is wrong
+                    -- Insuficcient funs only means something once youve looked at this accounts real balance, that is a business rule, checked against business state
+                    -- Pages start at 1 is not like that, you do not need to query anything to know page 0 is nonsense, its wrong by definition before the server ever touches the accounts table
+                    -- That is exactly what 400 Bad Request is for, invalid on its face, independent of any data
+                    -- Reusing Scenario 5's shape:
+                        -- { error: { code: INVALID_PAGE, message: Page numbers must be 1 or greater, details: { page: 0}}}
+                    -- Closes out the full picture these extra scenarios have been circling
+                        -- 400 Bad Request - wrong on its face, no data needed to know it (page 0, missing required field)
+                        - 422 Unprocessable Entity / 409 Conflit - well formed but conflicts with real business data once you check it such as insufficient funds
+                        -- 200 OK + empty - well formed, conflicts with nothing, just happens to land on zero results (page 999, empty filter match)
+            -- A client requests limit=10000 for page size, far beyond what any real client would need. Does the server owe them 10K accounts in one response, reject the request outright or something else and what would that look like?
+                -- I beleive that it should default to a max limit lets say of 100 accounts per page
+                -- 3 Different Reasonss a request can "not get what it wanted", three different responses and telling them apart was the actual thing being tests
+                    -- limit= 10000, clamping to a max is the right call and it's the more common real-world choice
+                        -- One addition, whe you camp, the response has to say so, page_size in the body should reflect what was actually used (being 100), not echo back 10K that was requested
+                            -- Otherwise the client computes its own total_pages math against a number that was never real, and their pagination silently breaks
+                        -- The other legit pattern you'll see in the wild is rejecting an over-limit request outright with 400 (Stripe does this) rather than clamping it (closer to what you picked, more GitHub's style), same "pick one, be consistent" situation as before
+    -- Scenario 6 - selling shares. The mirror of scenario 1, just the other direction
+        -- The request itself, reuse the endpoint you already designed for biying, adjusted for a sale
+            -- POST /transactions {"account" : 5, "ticker": "AAPL", "amount": 5, "transaction_type" : "SELL"}
+        -- The account tries to sell a quantity of 0, or a negative number of shares. Status code and response body?
+            -- 422 Unprocessable Entity {"error": "Invalid_Amount", "message": "Selling quantity must be greater than 0.00", details: { "amount": -2}}
+        -- The account tries to sell more shares of a ticker than they currently hold, say sell 500 AAPL while only holding 100, Status code and response body?
+            -- 409 Conflict { "error": "Invalid_Amount", "message": "Cannot sell more than current holding amount", "details:": {"currentHoldingAmount" : 100, "triedAmount": 500}}
+        -- The ticker itself does not correspont to any real, tradable asset in the system at all, a typo, or something never listed. Is that the same situtation as 3 or different. Status code and response body?
+            -- This one would be different since a mispelled ticker symbol and/or a symbol that isnt registered as something to submit transactions to will output a 404 Not Found the response would be {"error": "Non_Existent", "message": "Ticker symbol does not exist", details: {}}
+        -- Performance Ratings
+            -- Two small naming notes, not errors:
+                -- amount is a little ambiguous for a stock trade, could you mean dollars or shares, where quantity is unambiguous and keeping the same field name (accountID) across both buy/sell kepps the one endpoint's contract consistent
+                -- Negative/Zero Quantity - same mistake as page=0
+                    -- Reasoned trhough page-0 correctly, rejects and not empties, not a business rule becuas eno data lookup is needed to know -2 shares is nonsense
+                    -- Selling a negative or zero quantity  is exactly that same situation, went to 422 instead of 400.
+            -- Structural slip acorss all 3 of the response bodies
+                -- Scenarios 5 shape was {error: {code:, message:, details:}} - error is an object wrapping the other 3. mine had error as a bare string sittign next to message and details as siblings
+                    -- should have been {error: {code: invalid quantity, message: messageFromAbove}}
+                    -- One mroe things, you used Invalid_Amount as the code for both the negative quantity case and the insufficient holdings case
+                        -- Two different problems sharing one code defeats the point of having a code, the client could not tell them apart
+                    -- Each distinct failure needs its own INVALID_QUANTITY, something else for insufficient holdigns
+                -- Nonexistent ticker, isntainct that this is different from the insufficient holdings was right and genuinely the harder call
+                    -- What would be different is the specific code, 404 is conventionally reserved for when the requests URL names something that doesnt exist, like /accounts/999
+                        -- Here, the ticker is a field inside the body of a POST /transactions request, not the URL, the resource this URL is about is the transaction itself, which doesnt exist yet before youre creating it
+                        -- A bad reference inside a body is more commonly treated as 422 Unprocessable Entity, well-formed request but it points to something that is not real once you check
+                    -- THis one is honestly a little split in practice, some APIs do 404 a bad body-level reference too but 422 is the more defensible default
+                    -- One useful detai for your actual implementation: this chekc has to happen before the holdings check, you cannot ask do they hold enough of this until youve confirmed the ticker referes to a real asset at all, so the 2 checks are sequential, not independent
+        -- Status Code and Reasoning Isolations:
+            -- A new account is submitted with age: -5. What would the status code be?
+                -- this POST would return a status code of 422 Bad Request because of the age, it is a valid request but the age input is something that business rules would reject
+            -- A client tries to withdraw $50 from an account holding $20. What would the status code be?
+                -- 422 as well because the request itself is valid but business logic would reject a withdrawal request that exceeds current amount held
+            -- A client searches accounts by last name "Smith", and there happen to be no matches. What would the status code be?
+                -- 200 OK, request is fine but results return nothing so an empty details array of matching acccounts would be empty
+            -- A client submits a transaction with the ticker field left as an empty string. What would the status code be?
+                -- 400 Bad Request because the ticker field needs to have a value and 400 is for malformed or containing invalid data the server cannot parse which is the empty string
+            -- Performance Rating
+                -- every time an answer actually required checking a balance or a holding against real stored data, youve gotten it right. The gap is
+                    -- specifically on the other side, its not random, and the 4th questions shows exactly why
+                        -- I wrote that 400 is for cases that the server cannot parse, an empty string does parse fine, "" is a perfectly valid string.
+                            -- Whats actually wrong with it
+                            -- Is that a ticker cannot sensibly be blank, full stop, no database needed to know that
+                        -- But if your working definition of 400 is malformed unparseable then -5 genuinely does not look like a 400 candidate to you because it parses just fine as a number
+                    -- The actual gap:
+                        -- a value can be syntactically perfect and still semantically impossible and that case belongs in 400 too, its just a different flavor of wrong on its face than a missing or malformed field
+                -- The real dividing line ws never "can the parser handle this" it is "do you have to open the database and look something up before you can tell this is wrong"
+                    -- Missing a field, wrong type, unparseable JSON -> 400, no lookup needed
+                    -- A value that is present, correctly typed, but could never be valid for any account, under any circumstance (age below 0, negative share count, page 0) stil 400, no lookup needed, just a different shape of wrong
+                    -- A value that is perfectly reasonable in general but conflicts with this specific account's current data (withdraw more than the balance or sell more than the holdings), this is the only case that actually needs 422/409 because you cannot know its wrong without fetching something first
+                -- age: -5 belongs in the second bucket, never calid for anyone and no accounts data is needed to know that, so 400, same family as ticker and the quantity and page=0, not a business rule
+                -- Small separate fix on 3: the code and the reasoning are btoh right but the empty details array isnt quite the shape, details only exists inside an error object, this is not an erro its a 200 OK.
+                    -- The empty result just goes in the normal success body eg {data: []}, same as rep 5 and scenario 2
+                -- Confirmation if the explaination of the rule holds isnce old framing clearly was not generalizing on its own
+                    -- PATCH /accounts/5 with {age: 200}, a positive number, nothing missing, nothing unparseable. What would the status code be?
+                    -- A transaction submitted wtih quantity of 2.5 on a platform that only allows trading whole shares. What would the status code be?                    
+                        
