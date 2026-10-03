@@ -349,3 +349,110 @@ VALUES (4, 5, 25);
                     -- specifically for this request is well formed but it violates a businesss rule, exactly what insufficient funds is
                 -- Some APIs use 409 Conflic for the same situation (request conflicts with the accounts current state)
                     -- Both are legitamte and APIs genuinely split between them, 400 is the safe generic fallback if you dont want to commit to either
+    -- Scenario 2
+        -- A client wants to see account 5's holdings but only the ones still actually held (quantity greater than 0, fully sold-off positions shouldnt show up)
+        -- Design the endpoint:
+            -- What is the URL
+                -- GET /accounts/5/holdings and then filter on the assets quantities
+            -- What does the "still holds it" filter belong in the URL path or somewhere else
+                -- after the get as shown above
+            -- Give the status code for three separate situations:
+                -- holdings exist and some match the filter
+                    -- 200
+                -- holdings exist but none currently match
+                    -- 204 No Content
+                -- Account 5 doesnt exist at all
+                    -- 404 Not found
+        -- Two things to flag and one of them is a repeat pattern worth naming
+            -- The filter "after the GET" is the same mistake as scenario 1
+                -- Doing the quantity-filtering client-side, after fetching everything, means the server hands over every holding (including fully sold-off ones) and leveas client to sourt out which ones count
+                -- Same category of problem as buying shares: processing that belongs on the server is instead happening on the client
+                -- Its also wasteful, if an account had thousands of holdings, youd send all of them over the network just to throw most away, and its one more piece of logic every client has to reimplement identically, instead of once, centrally on the server
+        -- Where it belongs:
+            -- query parameters, not client-side filtering and not a path segment either
+            -- The filter isnt identifying a different resource, its narrowing the same collection so it goes after a ?: something like GET /accounts/5/holdings?quantity_gt=0
+                -- The server applies that filter internally and only sends back what matches
+            -- Query params are the standard peice for filtering, sorting and pagination on a collection endpoint, a path segment would mean inventing a new URL for every possible filter combination which does not scale
+        -- The Last Status Code Question:
+            -- Holdings exist but none currently match the filter, 204 No Content, connects back to rep 5, a successfuly collection GET is always 200, no matter how many results come back
+            -- 204 specifically means succeeded and there is no body at all but an empty array is a body
+                -- Its a completely valid response describing zero matches
+    -- Scenario 3
+        -- Deactivating an account
+        -- The business wants a way to close an account, not delete it permanently (historical transaction data has to stay), just mark it inactive so it stops showing up in normal acc listings
+            -- This doesnt cleanly fit CRUD, create read update delete
+        -- Propose an URL and method for this, with your reasoning
+            -- Since this action is something that should be applicable to every single client trying to do the same thing, the url should be GET accounts/accID?accStatus=inactive
+        -- Propose one other reasonable way to model the same action in REST and say what the tradeoff is between your two approaches
+            -- I honeslty have no clue
+        -- The actual tet: does this encode a rule or fact about the business domain that has to mean the same thing no matter whos asking? Or is it purely about how data you already have gets arranged for one particular user's convenience
+            -- The line is "does this define something about the business" (server) vs "does this just rearrange something the user already has" (client)
+        -- Two separate issues here and the first one is more important: GET cannot be the method for this at all
+            -- GET is defined as a "safe" method - by the HTTP spec itself, a GET is never supposed to change anything on the server
+                -- This isnt just a style convention, it has real teeth
+                    -- Borwsers prefetch links behind the scenes, search engine crawlers follow every GET link they find, proxies and CDNs cache GET responses - none of that machinery expects a GET to do antyhing so none of it is careful about triggering one
+                -- If GET /accounts/5?accStatus=inactive actually deactivated the account, a crawler indexing your site, or a browser prefetching a link, or even an <imgsrc="..."> tag pointing at that URL could silently deactivate real accounts with no user every clicking anything resembling a deactivate button
+                    -- This is also the first cousin of Idempotency, safe and idempotent are related but different properties
+            -- Second, smaller issue:
+                -- putting accStatus=inactive in the query string is mixing up two different things
+                -- A query string is for filtering or sorting what you read, that's exactly what you used it for in scenario 2
+                    -- Its not where you put the new value you want to write
+                        -- For a write, the value goes in the body, which is exactly what PATCH does
+                            -- Option A: fixing both issues with the samllest possible change from what you proposed:
+                                -- PATCH /accounts/5 {"accStatus": "inactive"}
+                                -- This treats deactivation as just another field being updates, reusing the PATCH machinery from rep 3 rather than inventing anything new
+                            -- Option B
+                                -- Since I had said that I was clueless for this one
+                                    -- Since its a real, known tension in REST (same one flagged back when REST's notes mentioned "not every operation maps cleanly to a noun+verb"):
+                                        -- dedicated action endpoint: POST /accounts/5/deactivate
+                                            -- Here, deactivate is a verb sitting in the URL, which breaks the usual URLS are nouns rule
+                                            -- The payoff is that it's unambiguous about what's happening, it's not a generic "edit some field" call that happens to touch status, it's explicitly the deactivation action
+                                                -- which makes it much easier to attach action-specific rules later (eg, refuse to deactivate an account with a nonzero balance or send a confirmation email on deactivation) without tangling that logic into a general purpose field update endpoint
+                            -- The Treadeoff:
+                                -- Option A (PATCH) stays pure to REST's noun based conventions and needs no new endpoint
+                                    -- but it hides a meaningful business action behind a generic "update any field" call
+                                -- Option B (the action endpoint) is explicit and gives deactivation its own place to grow business rules at the cost of being a named verb in the URL, a deliberate, debated exception to normal REST style rather than a violation of it
+    -- Scenario 4 - Pagination
+        -- The business expects the number of accounts to eventually grow into the thousands and no client should ever have to fetch all of them in a single response
+        -- Design how a client would ask for accoutns in pages of 50 at a time
+            -- GET /accounts? either pages=1 or results=50 I need help with these types of requirements, I dont quite understand it just yet, same for the following question
+        -- What does the request look like to get, say, page 2?
+            -- GET accounts/accounts?page=2
+        -- Should the response body just be the raw array of 50 accounts or something else, and if something else, what would you include and why
+            -- in the response body, it should contain what page it is and the accounts in that page such as the first 50
+        -- Rating on Performance
+            -- Query param naming has no single universal standard but you need two things together, a page indicator and a page size indicator. The two common pairings
+                -- page + limit (or page_size or per_page) - eg. GET /accounts?page=2&limit=50
+                    -- Page numbers are what a UI actually displays  ("Page 2 of 25") so the server does the skip-ahead match internally
+                -- offset + limit - eg GET /accounts?offset=50&limit=50
+                    -- Lower Level: the client says exactly how many rows to skip
+                    -- page is really just a friendlier wrapper around this (offset = (page - 1) * limit)
+                -- Either are legitmate; page/limit is natural fit for something a UI will click through. (A 3rd approach, cursor-based pagination, exists for feeds that change constantly enough that page numbers drift)
+            -- On the response boyd, this is a real shift from rep5, a bare array has nowhere to put "this is page 2 of 25" so the moment a collection becomes paginated, the response upgrades from a plain array into a wrapped object
+                -- A standalone example of the shape (not your answer, just the pattern):
+                    -- {page: 2, page_size: 50, total_count: 1234, total_pages: 25, data: [the 50 account objects for this page]}
+                        -- page/page_size echo back what was requested, total_count lets the client show "51-100 of 1,234"
+                        -- total_pages is often included directly too and data (sometimes items or results) holds the actual array
+                        -- Worth knowing now: once you reach Spring Data JPA, its built-in Page<T> type returns almost exactly this shape by default (content/totalPages/totalElements/size/number)
+            -- Two more on this:
+                -- Design the request for page 1 with a page size of 20 instead of 50. If there are 97 accounts total, what would total_pages be in the response?
+                -- A client requests page=999 but there are only 5 pages worth of accounts. Walk through it - what status code and what does the response body look like?
+    -- Scenario 5 - Error Response Bodies
+        -- When POST /transactions fails with a 422 because the account doesnt have enough cash, a bare 422 status code with an empty body doesnt give the client anything to show the user
+        -- Design what the respons ebody should contain in that failure case so the client can acutally display a usefull error message
+            --the current balance, the required balance and maybe the difference. it could be cb and difference or cb and required balance
+        -- What fields would you include and why
+            -- I need help with this one, same rules should be applied to these exercises. Such as increasing difficulty whenever its understood, and 2 more if understanding isnt shown like rn
+        -- Rating on Performance:
+            -- What's missing sits one level above your fields:
+                -- a shape that every error response in the API uses.
+                    -- If each endpoint's error body is ad hoc, the client's code has no reliable way to know what kind of error it's looking at without guessing from which fields happen to be present
+                        { error: { code: Insufficent Funds, message: Your acc bal is too low, details: { cBal: 120, reqBal: 150, diff: 30}}}
+                            -- code is a short, stable, machine-readable strign the client can branch on directly (show a top up your balance button only for INSUFFICIENT_FUNDS), this piece is what was missing
+                                -- Without it, the client would have to pattern-match the English message, which breaks the moment that wording changes
+                            -- message is the human-readable fallback
+                            -- details is exactly what you already designed, it just nests under the general shape instead of being the whole response
+                        -- This {code, message, details} pattern is very common in real APIs, Stripe's error objects are a well-known example
+        -- Two More on This:
+            -- Apply the same shape to a 404, GET /accounts/5 where acc 5 does not exist. What would code, message, and details be? Does details even need much in it this time?
+            -- POST /accounts fails validation on two fields at once, a missing email and an invalid age. Does the same details shape still work as-is, or does soemthing about it need to change to report more than one problem at once
