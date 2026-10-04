@@ -576,5 +576,47 @@ VALUES (4, 5, 25);
                     -- The empty result just goes in the normal success body eg {data: []}, same as rep 5 and scenario 2
                 -- Confirmation if the explaination of the rule holds isnce old framing clearly was not generalizing on its own
                     -- PATCH /accounts/5 with {age: 200}, a positive number, nothing missing, nothing unparseable. What would the status code be?
-                    -- A transaction submitted wtih quantity of 2.5 on a platform that only allows trading whole shares. What would the status code be?                    
+                        -- this one is 400 because no age should be 200 and it would be a bad request, although its correct, the age is not
+                    -- A transaction submitted wtih quantity of 2.5 on a platform that only allows trading whole shares. What would the status code be?
+                        -- this one would be 400 as well, although it would be allowable since its a small amount, the rule is whole numbers
+                -- For each, give the status code and one line saying whether it needed a lookup
+                    -- POST /accounts with an email that is already registered ot a different account
+                        -- I beleive this would fall under 409 since its trying to create an account but finds that there's an account already associated with that email so that would be a duplicate entry which is not allowed
+                    -- POST /transactions with ticker "ZZZZ", a symbol that is not in the assets table
+                        -- since we would need to check whether ZZZZ is a symbol in the assets table but dont get anything back since it doesnt exist it would be 404
+                        -- Its recommended to use 422 because 404 normally means the request's own URL names soemthing that does not exist and here the ticker is a field in the body
+                            -- Some APIs do use 404 so it is a convention difference not a mistake
+                    -- GET /accounts/5holdings?quantity_gt=abc
+                        -- since its expecting a number but received letters, it doesnt need to fetch so 400 for invalid format
+                    -- GET /accounts/5 when account 5 does not exist
+                        -- 404 Not Found because the account doesnt exit
+                    -- POST /transactions buying $2000 of shares on an account holding 500
+                        -- 422 because we would have to knwo what the actual balance of the account is before continuing
+
+
+
+-- Statelessness Notes and Exercises
+-- Notes
+    -- Defintion: stateless means each request carries everything the server needs to handle it. The server keeps no memory of earlier requests from that client
+    -- Not the same as "no database":
+        -- your accoutns table is resource data and thats fien. 
+        -- "State" here means per-client conversation memory, like "this user is logged in and on step 2 of checkout"
+    -- Identity: the client sends its token in the Authorization header on every request, which is the mechanism from our client-server discussion
+    -- Pagination: ?page=2 is stateless because the request says which page it wants. The server does not remember you were on page 1
+    -- Why it matters: any copy of the server can handle any request. That is what makes load balancing and crash recovery easy
+    -- The stateful alternative:
+        -- the server keeps your session in its own memory
+        -- If your next request lands on a different server copy, that session is gone
+        -- The workaround is "sticky sessions" which pin you to one server and give up much of the benefit
+-- Real-World and Edge Cases
+    -- most APIs use bearer tokens (JWTs), others use a session ID cookie with the actual session data in a shared store like Redis. That's a hybrid: the servers stay stateless and the state lives in one shared place
+    -- Stateless tokens have costs. They're hard to revoke before they expire and every request is a bit bigger because it carries credentials
+    -- Multi-step flows like a checkout wizard have to keep their progress somewhere, either in the client or in shared store
+-- Five Questions (answer in your own words, IDK is fine)
+    -- A client previously sent GET /accounts/5/holdings?page=1. Now it sends GET /accounts/5/holdings plus "give me the next page" with nothing else. Can a stateless server answer that? What does the request have to contain?
+    -- An API runs as two copies behind a load balancer. Server A stores your login session in its own memory and your next request goes to server B. What happens and what are two ways to fix it?
+    -- Is the accounts table "state" that breaks statelessness? Explain why or why not.
+    -- In your own words, why does statelessness make scaling up easier?
+    -- What does being stateless cost you?
+
                         
